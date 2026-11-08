@@ -1,0 +1,35 @@
+name: Release WiFile
+
+# Push a tag like v1.0.0 -> this builds the one-click WiFile-Setup.bat and posts it as a release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to release (like v1.0.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the one-click installer
+        run: python installer/build_setup.py
+      - name: Post the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/WiFile-Setup.bat --clobber
+          else
+            gh release create "$TAG" dist/WiFile-Setup.bat --title "WiFile ${TAG#v}" --notes-file installer/release_notes.md --target "$GITHUB_SHA"
+          fi
