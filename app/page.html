@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WiFile</title>
+<style>
+  :root { --bg:#12161f; --card:#1b2130; --line:#2a3245; --text:#e6ebf5; --dim:#8b96ad; --green:#3fbf6a; --blue:#4b8fe8; --amber:#e0a030; --red:#e05555; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.4 "Segoe UI", system-ui, sans-serif; background:var(--bg); color:var(--text); }
+  header { display:flex; align-items:center; gap:12px; padding:14px 16px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); z-index:2; flex-wrap:wrap; }
+  h1 { font-size:18px; margin:0; }
+  .dot { width:12px; height:12px; border-radius:50%; background:var(--dim); flex:none; }
+  #status { color:var(--dim); flex:1; min-width:160px; }
+  button { background:var(--card); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:8px 12px; font:inherit; cursor:pointer; }
+  button:hover { border-color:var(--blue); }
+  button.go { background:var(--blue); border-color:var(--blue); }
+  main { padding:16px; max-width:900px; margin:0 auto; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:14px; }
+  .tabs { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+  .tabs button.on { background:var(--blue); border-color:var(--blue); }
+  .crumbs { color:var(--dim); margin:6px 0 10px; word-break:break-all; }
+  .crumbs a { color:var(--blue); cursor:pointer; text-decoration:none; }
+  .row { display:flex; align-items:center; gap:10px; padding:8px 4px; border-top:1px solid var(--line); }
+  .row .n { flex:1; word-break:break-all; cursor:pointer; }
+  .row .s { color:var(--dim); font-size:13px; white-space:nowrap; }
+  .row .x { padding:4px 8px; font-size:13px; }
+  .nosync { opacity:.5; }
+  .tools { display:flex; gap:8px; flex-wrap:wrap; }
+  textarea, input[type=text] { width:100%; background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:8px; font:13px monospace; }
+  .small { color:var(--dim); font-size:13px; }
+  .err { color:var(--red); font-size:13px; white-space:pre-wrap; }
+  details summary { cursor:pointer; font-weight:600; }
+  #drop { position:fixed; inset:0; background:rgba(75,143,232,.18); border:4px dashed var(--blue); display:none; align-items:center; justify-content:center;
+          font-size:26px; font-weight:700; z-index:9; pointer-events:none; text-align:center; }
+  #toast { position:fixed; left:50%; bottom:22px; transform:translateX(-50%); background:var(--card); border:1px solid var(--blue); border-radius:10px;
+           padding:10px 16px; display:none; z-index:10; max-width:90vw; }
+  .tabs .tab { display:inline-flex; align-items:center; gap:2px; }
+  .tabs .tab .un { padding:4px 7px; border-radius:0 8px 8px 0; margin-left:-3px; font-size:12px; color:var(--dim); }
+  .tabs .tab button:first-child { border-radius:8px 0 0 8px; }
+  .add { border-style:dashed; color:var(--blue); }
+  #bar { height:6px; background:var(--line); border-radius:3px; overflow:hidden; margin-top:8px; display:none; }
+  #bar div { height:100%; background:var(--blue); width:0; transition:width .4s; }
+</style>
+</head>
+<body>
+<header>
+  <div class="dot" id="dot"></div><h1>📁 WiFile</h1>
+  <div id="status">loadin'...</div>
+  <button id="now">Sync now</button>
+  <button id="onoff">Pause</button>
+</header>
+<main>
+  <div class="card">
+    <div class="small" style="margin-bottom:8px">Shared folders - <b>drag any folder onto this window</b> to share it with your other PCs.</div>
+    <div class="tabs" id="tabs"></div>
+    <div class="crumbs" id="crumbs"></div>
+    <div class="tools">
+      <button class="go" onclick="pick.click()">⬆ Upload here</button>
+      <button onclick="mkdir()">New folder</button>
+      <input id="pick" type="file" multiple hidden>
+    </div>
+    <div id="bar"><div></div></div>
+    <div id="rows"></div>
+  </div>
+
+  <div class="card">
+    <details id="pairbox">
+      <summary>🔗 Paired PCs</summary>
+      <div id="peers" style="margin:10px 0"></div>
+      <p class="small">On the OTHER PC: open WiFile, copy its pair code, paste it here.</p>
+      <textarea id="code" rows="2" placeholder="WIF-..."></textarea>
+      <div class="tools" style="margin-top:8px"><button class="go" onclick="pair()">Pair</button><button onclick="preview()">Show what would copy</button></div>
+      <p class="small" style="margin-top:14px">This PC's pair code:</p>
+      <textarea id="mycode" rows="2" readonly onclick="this.select()"></textarea>
+      <div id="msg" class="small"></div>
+    </details>
+  </div>
+  <div id="errs" class="err"></div>
+</main>
+<div id="drop">📂 Drop a folder to share it<br><span class="small" style="font-size:15px">it shows up on your other PCs in Documents\WiFile</span></div>
+<div id="toast"></div>
+<script>
+const $ = id => document.getElementById(id);
+let S = null, folder = "Shared", path = "", tabsSig = "";
+function toast(t) { $("toast").textContent = t; $("toast").style.display = "block"; clearTimeout(toast.t); toast.t = setTimeout(() => $("toast").style.display = "none", 5000); }
+function dropped(msg) { $("drop").style.display = "none"; toast(msg); status(); }
+$("tabs").onclick = async e => {
+  const t = e.target;
+  if (t.dataset.f) { folder = t.dataset.f; path = ""; return list(); }
+  if (t.dataset.un) { if (confirm("Stop sharing '" + t.dataset.un + "'? The files stay right where they are.")) { await act({ act: "unshare", name: t.dataset.un }); } return; }
+  if (t.id === "addf") { toast("pick a folder in the popup..."); const d = await act({ act: "pickfolder" }); if (d.ok) toast("Now sharing '" + d.name + "'"); }
+};
+let dragN = 0;
+addEventListener("dragenter", e => { if ([...(e.dataTransfer.types || [])].includes("Files")) { dragN++; $("drop").style.display = "flex"; } });
+addEventListener("dragleave", () => { if (--dragN <= 0) { dragN = 0; $("drop").style.display = "none"; } });
+addEventListener("dragover", e => e.preventDefault());
+addEventListener("drop", e => { e.preventDefault(); dragN = 0;
+  if (!window.pywebview) { $("drop").style.display = "none"; toast("Open WiFile from the tray to drag folders in - or hit ➕ Share a folder"); } });
+const mb = b => b == null ? "" : b > 1e9 ? (b/1e9).toFixed(1)+" GB" : b > 1e6 ? (b/1e6).toFixed(1)+" MB" : b > 1e3 ? Math.round(b/1e3)+" KB" : b+" B";
+const q = o => new URLSearchParams(o).toString();
+
+async function act(o) {
+  const r = await fetch("/files/act", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(o) });
+  const d = await r.json(); if (d.error) alert(d.error); if (d.files) { S = d.files; paint(); } return d;
+}
+async function status() {
+  try { S = await (await fetch("/files")).json(); paint(); } catch (e) { $("status").textContent = "can't reach WiFile"; }
+}
+function paint() {
+  if (!S) return; const st = S.status;
+  const last = Object.entries(st.last || {}).map(([k, v]) => k + " " + v).join(", ");
+  let col = "var(--green)", txt = "all synced" + (last ? " · " + last : "");
+  if (st.busy) { col = "var(--blue)"; txt = st.now || "syncin'..."; }
+  else if (!S.on) { col = "var(--dim)"; txt = "paused"; }
+  else if (!S.peers.length) { col = "var(--amber)"; txt = "not paired with another PC yet"; }
+  else if (st.errors && st.errors.length) { col = "var(--red)"; txt = "hiccup - see bottom" + (last ? " · last good " + last : ""); }
+  $("dot").style.background = col; $("status").textContent = S.me + " · " + txt;
+  $("onoff").textContent = S.on ? "Pause" : "Start syncing";
+  $("bar").style.display = st.busy && st.todo ? "block" : "none";
+  $("bar").firstChild.style.width = (st.todo ? 100 * st.done / st.todo : 0) + "%";
+  $("errs").textContent = (st.errors || []).slice(-6).join("\n");
+  $("peers").innerHTML = S.peers.length ? S.peers.map(p => `<div class="row"><span class="n">🖥 ${p.name}</span><span class="s">${p.url}</span><button class="x" onclick="act({act:'unpair',name:'${p.name}'})">Unpair</button></div>`).join("") : '<span class="small">none yet</span>';
+  $("mycode").value = S.pair || "(Tailscale isn't running on this PC - no code yet)";
+  const sig = JSON.stringify(S.folders);
+  if (sig !== tabsSig) {
+    if (!tabsSig && !S.peers.length) $("pairbox").open = true;
+    tabsSig = sig;
+    if (!(folder in S.folders)) { folder = Object.keys(S.folders)[0] || ""; path = ""; setTimeout(list, 0); }
+    $("tabs").innerHTML = Object.entries(S.folders).map(([f, p]) =>
+      `<span class="tab"><button data-f="${f}" title="${p}">${f}</button><button class="un" data-un="${f}" title="Stop sharing (files stay put)">✕</button></span>`).join("")
+      + `<button class="add" id="addf">➕ Share a folder</button>`;
+  }
+  [...$("tabs").querySelectorAll("[data-f]")].forEach(b => b.classList.toggle("on", b.dataset.f === folder));
+}
+async function list() {
+  paint(); if (!folder) return;
+  const d = await (await fetch("/files/list?" + q({ folder, path }))).json();
+  const parts = path ? path.split("/") : [];
+  $("crumbs").innerHTML = `<a data-p="">${folder}</a>` + parts.map((p, i) => ` / <a data-p="${parts.slice(0, i + 1).join("/")}">${p}</a>`).join("");
+  $("crumbs").onclick = e => { if (e.target.dataset.p != null) { path = e.target.dataset.p; list(); } };
+  $("rows").innerHTML = (path ? `<div class="row"><span class="n" data-up="1">⬅ back</span></div>` : "") + d.rows.map(r => {
+    const rel = (path ? path + "/" : "") + r.name;
+    return `<div class="row ${r.nosync ? "nosync" : ""}" title="${r.nosync ? "this one stays on this PC only" : ""}">
+      <span class="n" data-rel="${encodeURIComponent(rel)}" data-dir="${r.dir ? 1 : ""}">${r.dir ? "📂" : "📄"} ${r.name}</span>
+      <span class="s">${r.dir ? "" : mb(r.size)}</span>
+      <button class="x" data-trash="${encodeURIComponent(rel)}">🗑</button></div>`;
+  }).join("") || '<div class="small" style="padding:8px">empty</div>';
+}
+$("rows").onclick = e => {
+  const t = e.target.closest("[data-rel],[data-trash],[data-up]"); if (!t) return;
+  if (t.dataset.up) { path = path.split("/").slice(0, -1).join("/"); return list(); }
+  if (t.dataset.trash) { const rel = decodeURIComponent(t.dataset.trash);
+    if (confirm("Move '" + rel + "' to todelete? (it goes to todelete on the other PCs too)")) act({ act: "trash", folder, path: rel }).then(list); return; }
+  const rel = decodeURIComponent(t.dataset.rel);
+  if (t.dataset.dir) { path = rel; list(); } else window.open("/files/get?" + q({ folder, path: rel, view: 1 }), "_blank");
+};
+$("pick").onchange = async () => {
+  const fd = new FormData(); fd.append("folder", folder); fd.append("path", path);
+  for (const f of $("pick").files) fd.append("file", f, f.name);
+  $("status").textContent = "uploadin' " + $("pick").files.length + " file(s)...";
+  const r = await fetch("/files/put", { method: "POST", body: fd }); const d = await r.json();
+  if (d.error) alert(d.error); $("pick").value = ""; list();
+};
+function mkdir() { const n = prompt("Folder name?"); if (n) act({ act: "mkdir", folder, path, name: n }).then(list); }
+async function pair() { const code = $("code").value.trim(); if (!code) return; $("msg").textContent = "callin' the other PC...";
+  const d = await act({ act: "pair", code }); $("msg").textContent = d.ok ? "Paired! Hit 'Show what would copy' first, then Start syncing." : ""; if (d.ok) $("code").value = ""; }
+async function preview() { $("msg").textContent = "countin'...";
+  const d = await act({ act: "preview" }); const p = d.preview || {};
+  $("msg").innerHTML = Object.entries(p).map(([pc, f]) => f.error ? `${pc}: ${f.error}` : `<b>${pc}</b>: ` +
+    Object.entries(f).map(([k, v]) => `${k}: ${v.pull} to copy here (${v.pull_mb} MB), ${v.trash} to todelete`).join(" · ")).join("<br>") || "nothing to do"; }
+$("now").onclick = () => act({ act: "now" });
+$("onoff").onclick = () => act({ act: S && S.on ? "pause" : "start" });
+status().then(list); setInterval(status, 2500);
+function hello() { fetch("/hello?app=" + (window.pywebview ? 1 : 0)).catch(() => {}); }
+hello(); addEventListener("pywebviewready", hello);
+</script>
+</body>
+</html>

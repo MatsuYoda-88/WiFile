@@ -1,0 +1,8 @@
+dist/
+__pycache__/
+*.pyc
+memory/
+logs/
+venv/
+key.txt
+WiFile phone link.txt
